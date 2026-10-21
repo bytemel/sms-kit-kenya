@@ -21,6 +21,9 @@ import { createMemoryOptOutStore, createJsonFileOptOutStore } from "./lib/optout
 const BODY_LIMIT = 16 * 1024; // callbacks are a handful of short fields
 const ROUTES = new Set(["delivery", "incoming", "optout"]);
 
+// Logs show only the last 4 digits of a phone number: enough to find the person, not to text them.
+export const maskPhone = (phone) => `...${String(phone ?? "").slice(-4)}`;
+
 const digest = (s) => createHash("sha256").update(String(s)).digest();
 const sameToken = (given, expected) => typeof given === "string" && timingSafeEqual(digest(given), digest(expected));
 
@@ -68,14 +71,14 @@ export function createApp({
       if (!msg) return log("incoming message ignored: no sender");
       if (msg.optOut) {
         const phone = await optOuts.add(msg.from, { source: "reply", text: msg.text.slice(0, 40) }).catch(() => null);
-        if (phone) { log(`opt-out from ${phone} ("${msg.keyword}")`); later(() => onOptOut(phone, { source: "reply" })); }
+        if (phone) { log(`opt-out from ${maskPhone(phone)} ("${msg.keyword}")`); later(() => onOptOut(phone, { source: "reply" })); }
       }
       later(() => onIncoming(msg));
     } else {
       const out = parseBulkOptOut(fields);
       if (!out) return log("opt-out notification ignored: no valid phone number");
       await optOuts.add(out.phone, { source: "bulk-optout", senderId: out.senderId });
-      log(`opt-out from ${out.phone} (network block)`);
+      log(`opt-out from ${maskPhone(out.phone)} (network block)`);
       later(() => onOptOut(out.phone, { source: "bulk-optout", senderId: out.senderId }));
     }
   }

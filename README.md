@@ -47,6 +47,8 @@ The names and numbers in `sample/people.csv` are made up. Some of the numbers ma
 
 Other options: `--rate` (KES per SMS part), `--batch-size` (default 100), `--data-dir` (where the ledger and opt-out JSON files live, default `data/`).
 
+`node bin/sms.js pending` lists sends whose outcome is unknown, and `node bin/sms.js resolve <key> --sent` or `--failed` settles one after you check the dashboard (see "Settling a pending send" below).
+
 A real send prints each number as sent (with the message id and cost Africa's Talking reported) or failed (with the reason), then everyone skipped or needing a check. It exits with 1 when anything failed or needs checking.
 
 ## What each part does
@@ -59,7 +61,7 @@ A real send prints each number as sent (with the message id and cost Africa's Ta
 | `lib/optout.js` | STOP style replies, an opt-out store in memory or in a JSON file, and `filterOptedOut`. |
 | `lib/client.js` | `createSmsClient(...).send(...)`: the whole send, with dry run, batching, the idempotency ledger, timeouts and retries. |
 | `lib/dlr.js` | Parses delivery reports, incoming messages and opt-out notifications, and keeps the last status per message id. |
-| `lib/store.js` | The small key value store behind the ledger, opt-outs and statuses: memory or one JSON file. |
+| `lib/store.js` | The small key value store behind the ledger, opt-outs and statuses: memory, or one JSON file guarded by a lock file. |
 | `server.js` | The callback server. |
 | `bin/sms.js` | The command line. |
 | `examples/next-route-handler.md` | Calling the kit from a Next.js route handler. |
@@ -98,18 +100,21 @@ The request is `POST /version1/messaging`, form encoded, with the `apiKey` and `
 
 Every message gets a key: a SHA-256 of the normalised number, the campaign key and a hash of the template. Same person, same campaign, same template: same key.
 
-Before a request goes out, each key is claimed in the ledger as `pending`. After the answer it becomes `sent` (with the message id) or `failed`. A second run, a double click or a cron that fires twice finds the key and skips the person with "Already sent in this campaign". Two runs at the same moment cannot both claim the same key.
+Before a request goes out, each key is claimed in the ledger as `pending`. After the answer it becomes `sent` (with the message id) or `failed`. A second run, a double click or a cron that fires twice finds the key and skips the person with "Already sent in this campaign". Two runs at the same moment cannot both claim the same key: inside one process the store queues its writes, and separate processes on one machine sharing the JSON ledger take turns through a lock file (`ledger.json.lock`, created with the `wx` flag, removed after each write, cleared if older than 30 seconds). A lock file does not work across machines; there, use the database ledger below.
 
 Africa's Talking charges once it accepts a message, so the kit never sends again when it cannot tell what happened:
 
 - **Timeout** (no answer within `timeoutMs`, default 15 seconds): not retried. The person goes to `needsChecking` and stays `pending`, so later runs keep skipping them until a person checks the dashboard.
 - **Connection dropped mid request** (`ECONNRESET` and similar): the same.
 - **Connection never made** (`ECONNREFUSED`, DNS failure, connect timeout): the request never left, so it is retried with backoff, and marked failed if it never gets through.
-- **HTTP 5xx**: retried with backoff (`retries`, default 2; `backoffMs`, default 500, doubling). If every attempt gets a 5xx, the people go to `needsChecking`, not to a blind resend.
+- **HTTP 503** (service unavailable): retried with backoff (`retries`, default 2; `backoffMs`, default 500, doubling), because a 503 means the request was not taken. If every attempt gets a 503, the people go to `needsChecking`.
+- **Any other HTTP 5xx** (500, 502, 504 and so on): not retried. It can come back after the message was accepted, so the people go to `needsChecking`. `retryStatuses` changes the list if you know better.
 - **Other HTTP errors** (bad key, bad request): failed with the reason, not retried.
 - **A number missing from the response**: `needsChecking`.
 
 `failed` keys can be claimed again by a later run, so fixing a low balance and re-running sends only to the people who did not get it.
+
+**Settling a pending send.** A `pending` entry stays skipped until a person decides. `node bin/sms.js pending` lists them with their keys (a real send also prints the key next to each person that needs checking). Find the message in the Africa's Talking dashboard, then run `node bin/sms.js resolve <key> --sent --message-id <id>` if it went out, so it stays skipped, or `node bin/sms.js resolve <key> --failed` if it did not, so the next run sends it. In code, `ledger.resolve(key, "sent" | "failed")` does the same. Only `pending` entries can be resolved.
 
 The campaign key is your decision: use one per real reminder (`class-reminder-2026-10-24`), never a timestamp of the run.
 
@@ -118,7 +123,7 @@ The campaign key is your decision: use one per real reminder (`class-reminder-20
 There are two ways a person in Kenya stops your messages, and the kit handles both.
 
 1. **They reply STOP to your short code.** Africa's Talking posts the reply to your incoming messages callback. `parseOptOut` treats these as opt-outs, forgiving case, extra spaces and trailing punctuation: `STOP`, `STOP ALL`, `STOPALL`, `UNSUBSCRIBE`, `SIMAMA` and `ACHA` (Swahili for stop). The stop word may be followed by one more word, because people often add the sender name (`STOP EPICPRIME`). A longer sentence is not an opt-out: in Swahili "Acha nikuambie..." means "let me tell you...". The list is `STOP_WORDS` in `lib/optout.js`; add to it if your audience uses other words.
-2. **They block your sender ID through their network.** People cannot reply to an alphanumeric sender ID such as `EpicPrime`. They opt out through their network instead (on Safaricom, the `*456*9#` menu). Africa's Talking can notify you of these bulk SMS opt-outs, and the server takes them on `/sms/optout`. Later sends to that number come back as `UserInBlacklist` (statusCode 406); the kit adds the number to the opt-out list the first time that happens.
+2. **They block your sender ID through their network.** People cannot reply to an alphanumeric sender ID such as `EpicPrime`. They opt out through their network instead. Africa's Talking's help centre gives the `*456*9#` menu for this (it does not say which networks it covers, so check with your provider). Africa's Talking can notify you of these bulk SMS opt-outs, and the server takes them on `/sms/optout`. Later sends to that number come back as `UserInBlacklist` (statusCode 406); the kit adds the number to the opt-out list the first time that happens.
 
 So "Reply STOP to opt out" only makes sense when you send from a short code. From an alphanumeric sender ID, say how to opt out through the network, or leave the line out.
 
@@ -144,11 +149,11 @@ npm start                 # node --env-file=.env server.js, port 3000
 
 **Answers.** A well formed request with the right token always gets a 200, even when its content is ignored (for example a report with no message id), so Africa's Talking stops retrying. The status is stored first, which takes milliseconds, and your hooks (`onDelivery`, `onIncoming`, `onOptOut`) run after the answer has gone. Bodies are read as form encoded, with JSON accepted too, and capped at 16 KB.
 
-Statuses and opt-outs live in `data/statuses.json` and `data/optouts.json` (the `data/` folder is gitignored). Use the same `data/optouts.json` for the command line and the server, or a database for both.
+Statuses and opt-outs live in `data/statuses.json` and `data/optouts.json` (the `data/` folder is gitignored). Use the same `data/optouts.json` for the command line and the server on one machine, or a database for both. The server's log shows only the last 4 digits of a phone number.
 
 ## Swapping the stores for Postgres or Supabase
 
-The JSON files are safe inside one Node process. Several processes, or serverless functions, need a database. These are the tables, and the queries each method needs.
+The JSON files work for one machine: one process, or several sharing the file through the lock. Several machines, or serverless functions, need a database. These are the tables, and the queries each method needs.
 
 ```sql
 create table if not exists sms_ledger (
@@ -205,11 +210,11 @@ I could not read developers.africastalking.com from a script on 2026-10-21 (it s
 - **Callback signing.** I found no signature or documented IP list. The path token is the guard.
 - **Recipients per request.** I found no documented maximum. The default batch of 100 is a cautious choice; raise it only after testing.
 - **The newer bulk endpoint.** Africa's Talking also has `POST /version1/messaging/bulk`, which takes JSON with a `phoneNumbers` list. Their own Node SDK still uses the form encoded `/version1/messaging`, with a note that it will move. This kit uses the endpoint the SDK uses today.
-- **Retries after a 5xx.** A 5xx is retried, as most clients do. If Africa's Talking ever accepts a message and still answers 5xx, a retry could send it twice. Lower `retries` to 0 if that worries you.
+- **Which 5xx answers are safe to retry.** I found nothing from Africa's Talking on this. The kit retries only 503 and treats every other 5xx as "may have gone out". Set `retries: 0` to never retry at all.
 
 And the things only you can do:
 
-- **Sender ID approval.** Apply for an alphanumeric sender ID in the dashboard. Each network approves it, which takes time. Set `AT_SENDER_ID` exactly as approved, capitals included, or sends fail with `InvalidSenderId`. Without one, messages go out under a shared default sender.
+- **Sender ID approval.** Apply for an alphanumeric sender ID in the dashboard. Each network approves it, which takes time. Set `AT_SENDER_ID` exactly as approved, capitals included, or sends fail with `InvalidSenderId`. Without one, Africa's Talking's connector definition says the sender defaults to `AFRICASTKNG`; check with Africa's Talking what your recipients will see.
 - **Promotional or transactional.** Ask Africa's Talking which type suits you. Promotional sender IDs are refused by people who blocked promotional messages.
 - **Rates.** There is no price in this code. Put your rate per SMS part from your own Africa's Talking price list in `SMS_RATE_PER_SEGMENT` or `--rate`; it changes with network, volume and time.
 - **Test with real phones.** One live message per network you send to, read on the handset, before the first big send.
@@ -222,13 +227,13 @@ All read on 2026-10-21.
 
 - Africa's Talking Node SDK, `lib/common.js` and `lib/sms.js`: <https://github.com/AfricasTalkingLtd/africastalking-node.js>. Live base `https://api.africastalking.com/version1`, sandbox `https://api.sandbox.africastalking.com/version1`, SMS path `/messaging`, form encoded body, `apikey` and `Accept` headers, the fields `username`, `to` (comma joined), `message`, `from`, `bulkSMSMode=1`, `enqueue`, and for premium SMS `keyword`, `linkId`, `retryDurationInHours`. Success comes back as HTTP 201.
 - The same SDK's README: the sandbox username is always `sandbox`.
-- Africa's Talking SMS connector definition (published by Africa's Talking): <https://github.com/AfricasTalkingLtd/PowerPlatformConnectors/tree/HEAD/certified-connectors/Africa's%20Talking%20SMS>, and its page on Microsoft Learn: <https://learn.microsoft.com/en-us/connectors/africastalkingsms/>. The response shape `SMSMessageData.Message` and `SMSMessageData.Recipients[]` with `number`, `status`, `statusCode`, `cost`, `messageId`, `messageParts`; the newer `/version1/messaging/bulk` JSON endpoint; and the three notifications: delivery reports, incoming messages, and bulk SMS opt-outs from an alphanumeric sender ID.
+- Africa's Talking SMS connector definition (published by Africa's Talking): <https://github.com/AfricasTalkingLtd/PowerPlatformConnectors/tree/HEAD/certified-connectors/Africa's%20Talking%20SMS>, and its page on Microsoft Learn: <https://learn.microsoft.com/en-us/connectors/africastalkingsms/>. The response shape `SMSMessageData.Message` and `SMSMessageData.Recipients[]` with `number`, `status`, `statusCode`, `cost`, `messageId`, `messageParts`; the newer `/version1/messaging/bulk` JSON endpoint; the default sender `AFRICASTKNG` when `from` is empty; and the three notifications: delivery reports, incoming messages, and bulk SMS opt-outs from an alphanumeric sender ID.
 - Help centre, Messaging Error Codes: <https://help.africastalking.com/en/articles/16150386-messaging-error-codes>. statusCodes 100 Processed, 101 Sent, 102 Queued, 401 RiskHold, 402 InvalidSenderId, 403 InvalidPhoneNumber, 404 UnsupportedNumberType, 405 InsufficientBalance, 406 UserInBlacklist, 407 CouldNotRoute, 500 InternalServerError, 501 GatewayError, 502 RejectedByGateway; delivery statuses Sent, Submitted, Buffered, Success, Rejected, Failed, Expired.
 - Help centre, Why did my messages fail: <https://help.africastalking.com/en/articles/742491-why-did-my-messages-fail>. A sample send response, delivery statuses, failure reasons, and that messages with a % sign have failed.
 - Help centre, Making your SMS characters count: <https://help.africastalking.com/en/articles/2964644-making-your-sms-characters-count>. 160 characters in GSM-7, 70 otherwise, and extension characters counting as 2.
 - Help centre, Why was my message billed twice: <https://help.africastalking.com/en/articles/796314-why-was-my-message-billed-twice>. Each part is billed as one message.
 - Help centre, Where are my incoming messages: <https://help.africastalking.com/en/articles/742510-where-are-my-incoming-messages>. Incoming messages go to your callback URL, retried every minute until a 200 or 12 hours.
-- Help centre, UserInBlacklist: <https://help.africastalking.com/en/articles/5209677-userinblacklist>, and What is a link Id: <https://help.africastalking.com/en/articles/2249217-what-is-a-link-id>.
+- Help centre, UserInBlacklist: <https://help.africastalking.com/en/articles/5209677-userinblacklist>. A number is blacklisted when the person opted out of a sender ID or blocked all messages through the opt-out code, and the `*456*9#` menu to undo it. And What is a link Id: <https://help.africastalking.com/en/articles/2249217-what-is-a-link-id>.
 - Africa's Talking sample app athena, `routes/dlrs.js` and `routes/sms.js`: <https://github.com/AfricasTalkingLtd/athena>. Delivery reports carry `id` and `status`; incoming messages carry `from`, `to`, `text` and `date`. The Java and Go SDK message models add `id` and `linkId`.
 - The GSM 03.38 alphabet in `lib/segments.js` follows 3GPP TS 23.038, which I did not re-read today. The help centre's list differs in two small ways (it includes the backtick and a different delta character); the kit follows the standard, and `toGsmSafe` swaps both.
 
@@ -238,11 +243,11 @@ All read on 2026-10-21.
 npm test
 ```
 
-70 tests with `node:test`, no network: phone formats and refusals, segment edges (160, 161, 70, 71, a euro sign on the boundary, emoji surrogate pairs), templates, STOP parsing, both stores, the CSV reader, the client against a fake Africa's Talking (request shape, batching, the same send twice sending once, two runs at once, timeouts, 5xx, refused and dropped connections, UserInBlacklist), delivery report parsing, every server route on a random port, and the command line.
+77 tests with `node:test`, no network: phone formats and refusals, segment edges (160, 161, 70, 71, a euro sign on the boundary, emoji surrogate pairs), templates, STOP parsing, both stores, the CSV reader, the client against a fake Africa's Talking (request shape, batching, the same send twice sending once, two runs at once, timeouts, 503 retried and other 5xx not, refused and dropped connections, UserInBlacklist, resolving pending sends), separate processes sharing one JSON ledger, stale and live lock files, delivery report parsing, every server route on a random port, masked phone numbers in logs, and the command line.
 
 ## Limits
 
-- The JSON file stores are for one process. Use the Postgres tables above for anything bigger.
+- The JSON file stores are for one machine. Use the Postgres tables above for more than that, or for serverless functions.
 - No quiet hours, daily cap or rate limit. Add them where you schedule sends.
 - Premium SMS (`keyword`, `linkId`) and fetching the inbox are not covered.
 - Kenyan numbers only. Other countries are refused on purpose.

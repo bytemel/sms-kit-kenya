@@ -5,6 +5,8 @@
 //   node bin/sms.js send --csv sample/people.csv --template "Hi {{first_name}}, ..." --dry-run
 //   node bin/sms.js send --csv people.csv --template "..." --campaign oct-reminder --sandbox
 //   node bin/sms.js send --csv people.csv --template "..." --campaign oct-reminder --live
+//   node bin/sms.js pending
+//   node bin/sms.js resolve <key> --sent --message-id ATXid_...   (or --failed)
 //
 // With no --sandbox or --live flag, send only prints the plan. Nothing leaves your machine.
 
@@ -22,9 +24,13 @@ const HELP = `Usage:
   node bin/sms.js check "your message"
   node bin/sms.js send --csv FILE --template TEXT [--campaign KEY] [--dry-run | --sandbox | --live]
       [--phone-column phone] [--rate KES_PER_SMS_PART] [--sender-id NAME] [--batch-size 100] [--data-dir data]
+  node bin/sms.js pending [--data-dir data]
+  node bin/sms.js resolve KEY (--sent [--message-id ID] | --failed) [--data-dir data]
 
 send prints the plan unless you add --sandbox or --live. A real send needs --campaign: it is how a
-second run knows who already got the message. --live also needs AT_USERNAME and AT_API_KEY.`;
+second run knows who already got the message. --live also needs AT_USERNAME and AT_API_KEY.
+pending lists sends whose outcome is unknown. After checking the Africa's Talking dashboard, resolve
+each one: --sent if it went out (it stays skipped), --failed if it did not (the next run sends it).`;
 
 const pad = (s, n) => String(s).padEnd(n).slice(0, n);
 const cut = (s, n) => (s.length > n ? s.slice(0, n - 3) + "..." : s);
@@ -74,7 +80,7 @@ function printSkips(result, out) {
   }
   if (result.needsChecking.length) {
     out("\nNeeds checking (not sent again on purpose):");
-    for (const s of result.needsChecking) out(`  row ${s.index + 1} ${s.phone}: ${s.reason}`);
+    for (const s of result.needsChecking) out(`  row ${s.index + 1} ${s.phone}: ${s.reason}${s.key ? ` Key: ${s.key}` : ""}`);
   }
 }
 
@@ -96,7 +102,7 @@ async function send(args, { env, out, fetch }) {
     senderId: args["sender-id"] || env.AT_SENDER_ID || undefined,
     batchSize: args["batch-size"] ? Number(args["batch-size"]) : undefined,
     rate: args.rate ?? env.SMS_RATE_PER_SEGMENT ?? undefined,
-    ledger: createLedger(createJsonFileStore(join(dataDir, "ledger.json"))),
+    ledger: ledgerAt(dataDir),
     optOuts: createJsonFileOptOutStore(join(dataDir, "optouts.json")),
     fetch,
   });
@@ -121,8 +127,40 @@ async function send(args, { env, out, fetch }) {
   return result.failed.length || result.needsChecking.length ? 1 : 0;
 }
 
+const ledgerAt = (dataDir) => createLedger(createJsonFileStore(join(dataDir, "ledger.json")));
+
+async function pending(args, { env, out }) {
+  const rows = (await ledgerAt(args["data-dir"] || env.DATA_DIR || "data").all()).filter((r) => r.status === "pending");
+  if (!rows.length) { out("Nothing pending."); return 0; }
+  for (const r of rows) out(`${r.key}  ${r.phone}  campaign "${r.campaign}"  since ${r.claimedAt}`);
+  out(`\n${rows.length} pending. Check each in the Africa's Talking dashboard, then run resolve.`);
+  return 0;
+}
+
+async function resolve(key, args, { env, out }) {
+  if (!key || args.sent === args.failed) { out("Usage: node bin/sms.js resolve KEY --sent [--message-id ID]  or  --failed"); return 2; }
+  const status = args.sent ? "sent" : "failed";
+  const extra = args["message-id"] ? { messageId: args["message-id"] } : {};
+  const row = await ledgerAt(args["data-dir"] || env.DATA_DIR || "data").resolve(key, status, extra);
+  if (!row) { out(`No pending send with key ${key}. Run pending to list them.`); return 1; }
+  out(`Marked ${row.phone} as ${status}. ${status === "sent" ? "Later runs skip it." : "The next run sends it."}`);
+  return 0;
+}
+
 export async function main(argv, { env = process.env, out = console.log, fetch = globalThis.fetch } = {}) {
   const [command, ...rest] = argv;
+  if (command === "pending" || command === "resolve") {
+    let parsed;
+    try {
+      parsed = parseArgs({ args: rest, allowPositionals: true, options: {
+        "data-dir": { type: "string" }, sent: { type: "boolean" }, failed: { type: "boolean" }, "message-id": { type: "string" },
+      } });
+    } catch (err) {
+      out(`${err.message}\n\n${HELP}`);
+      return 2;
+    }
+    return command === "pending" ? pending(parsed.values, { env, out }) : resolve(parsed.positionals[0], parsed.values, { env, out });
+  }
   if (command === "check") {
     if (!rest.length) { out('Usage: node bin/sms.js check "your message"'); return 2; }
     return check(rest.join(" "), out);

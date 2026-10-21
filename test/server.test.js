@@ -66,6 +66,16 @@ test("an incoming STOP opts the sender out; other messages do not", async () => 
   assert.equal(hooks.filter((h) => h[0] === "incoming").length, 2);
 });
 
+test("logs never hold a full phone number, only the last 4 digits", async () => {
+  await form(`/sms/incoming/${TOKEN}`, { from: "+254700000101", to: "40404", text: "STOP" });
+  await form(`/sms/optout/${TOKEN}`, { phoneNumber: "+254700000103" });
+  await form(`/sms/delivery/${TOKEN}`, { id: "m9", status: "Weird", phoneNumber: "+254700000104" });
+  const all = logs.join("\n");
+  assert.match(all, /opt-out from \.\.\.0101/);
+  assert.match(all, /opt-out from \.\.\.0103/);
+  assert.doesNotMatch(all, /700000|254700|0700/);
+});
+
 test("a bulk opt-out notification adds the number", async () => {
   assert.equal((await form(`/sms/optout/${TOKEN}`, { phoneNumber: "+254700000103", senderId: "EpicPrime" })).status, 200);
   const [row] = await optOuts.list();

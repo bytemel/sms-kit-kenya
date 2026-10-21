@@ -147,7 +147,7 @@ test("a timeout is never retried and is flagged for checking, also on the next r
   assert.match(second.needsChecking[0].reason, /Check the Africa's Talking dashboard/);
 });
 
-test("a 5xx answer is retried with backoff", async () => {
+test("a 503 answer is retried with backoff", async () => {
   const waits = [];
   const at = fakeAT((body, n) => n < 3 ? new Response("busy", { status: 503 }) : null);
   const out = await client(at.fetch, { sleep: async (ms) => waits.push(ms), backoffMs: 100 }).send({ campaign: "r", template: "Hi", recipients: [PEOPLE[0]] });
@@ -156,11 +156,41 @@ test("a 5xx answer is retried with backoff", async () => {
   assert.equal(out.sent.length, 1);
 });
 
-test("5xx every time ends as needs checking, not as a blind resend", async () => {
-  const at = fakeAT(() => new Response("down", { status: 500 }));
+test("a 503 every time is retried, then ends as needs checking, not as a blind resend", async () => {
+  const at = fakeAT(() => new Response("busy", { status: 503 }));
   const out = await client(at.fetch, { retries: 2 }).send({ campaign: "r5", template: "Hi", recipients: [PEOPLE[0]] });
   assert.equal(at.calls.length, 3);
-  assert.match(out.needsChecking[0].reason, /answered 500 3 times/);
+  assert.match(out.needsChecking[0].reason, /answered 503 3 times/);
+});
+
+test("any other 5xx is never retried: the message may have been taken", async () => {
+  for (const status of [500, 502, 504]) {
+    const at = fakeAT((body, n) => n === 1 ? new Response("bad gateway", { status }) : null);
+    const sms = client(at.fetch);
+    const out = await sms.send({ campaign: `x${status}`, template: "Hi", recipients: [PEOPLE[0]] });
+    assert.equal(at.calls.length, 1, String(status));
+    assert.equal(out.sent.length, 0);
+    assert.match(out.needsChecking[0].reason, new RegExp(`answered ${status}\\. The message may have gone out`));
+    assert.match(out.needsChecking[0].key, /^[a-f0-9]{64}$/);
+    const again = await sms.send({ campaign: `x${status}`, template: "Hi", recipients: [PEOPLE[0]] });
+    assert.equal(at.calls.length, 1, "the next run does not resend either");
+    assert.equal(again.needsChecking.length, 1);
+  }
+});
+
+test("a pending send can be resolved by hand: sent stays skipped, failed is sent next run", async () => {
+  const at = fakeAT((body, n) => n <= 2 ? new Response("oops", { status: 500 }) : null);
+  const ledger = createLedger();
+  const sms = client(at.fetch, { ledger });
+  const [a] = (await sms.send({ campaign: "p1", template: "Hi", recipients: [PEOPLE[0]] })).needsChecking;
+  const [b] = (await sms.send({ campaign: "p2", template: "Hi", recipients: [PEOPLE[0]] })).needsChecking;
+  assert.equal((await ledger.resolve(a.key, "sent", { messageId: "ATXid_dash" })).status, "sent");
+  assert.equal((await ledger.resolve(b.key, "failed")).status, "failed");
+  assert.equal(await ledger.resolve(a.key, "failed"), null, "only pending entries can be resolved");
+  await assert.rejects(ledger.resolve(a.key, "maybe"), /"sent" or "failed"/);
+  assert.equal((await sms.send({ campaign: "p1", template: "Hi", recipients: [PEOPLE[0]] })).skipped[0].reason, "Already sent in this campaign.");
+  assert.equal((await sms.send({ campaign: "p2", template: "Hi", recipients: [PEOPLE[0]] })).sent.length, 1);
+  assert.equal(at.calls.length, 3);
 });
 
 test("connection refused is retried, then failed so a later run can send", async () => {

@@ -2,7 +2,7 @@
 
 This is a sketch, not wired into any build. Copy `lib/` into your app (for example `src/lib/sms/`) and import from there. The kit has no dependencies, so nothing else to install.
 
-The route below sends a class reminder. A Vercel cron or a staff button calls it. It runs on the Node.js runtime, because the kit uses `node:crypto`.
+The route below sends a class reminder. A Vercel cron (which sends GET) or a staff button (POST) calls it. It runs on the Node.js runtime, because the kit uses `node:crypto`.
 
 ```js
 // app/api/reminders/route.js
@@ -12,9 +12,21 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
+// Vercel cron calls the route with GET and sends "Authorization: Bearer <CRON_SECRET>".
+// A staff button can POST to the same handler.
+export async function GET(request) {
+  return sendReminder(request);
+}
+
 export async function POST(request) {
-  // Route handlers are public endpoints. Check the caller on the server, every time.
-  if (request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+  return sendReminder(request);
+}
+
+async function sendReminder(request) {
+  // Route handlers are public endpoints. Check the caller on the server, every time. With CRON_SECRET
+  // unset, the comparison would accept "Bearer undefined", so refuse outright.
+  const secret = process.env.CRON_SECRET;
+  if (!secret || request.headers.get("authorization") !== `Bearer ${secret}`) {
     return Response.json({ ok: false, message: "Not allowed." }, { status: 401 });
   }
 

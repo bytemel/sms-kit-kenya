@@ -71,3 +71,36 @@ test("a sandbox send goes to the sandbox URL and writes the ledger", async () =>
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("pending lists unknown outcomes, and resolve settles them by hand", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "sms-kit-resolve-"));
+  let posts = 0;
+  const fetch = async (url, init) => {
+    posts++;
+    if (posts === 1) return new Response("bad gateway", { status: 502 });
+    const to = new URLSearchParams(init.body).get("to").split(",");
+    return new Response(JSON.stringify({ SMSMessageData: { Recipients: to.map((number) => ({ number, statusCode: 101, status: "Success", messageId: "ATXid_ok", cost: "KES 0.8000" })) } }), { status: 201 });
+  };
+  try {
+    const env = { AT_API_KEY: "sandbox_key" };
+    const csv = join(dir, "one.csv");
+    await (await import("node:fs/promises")).writeFile(csv, "phone\n0700000101\n");
+    const args = ["send", "--csv", csv, "--template", "Hi", "--campaign", "res", "--sandbox", "--data-dir", dir];
+    const first = await run(args, { env, fetch });
+    assert.equal(first.code, 1);
+    const key = first.text.match(/Key: ([a-f0-9]{64})/)[1];
+    const list = await run(["pending", "--data-dir", dir]);
+    assert.match(list.text, new RegExp(`${key}\\s+\\+254700000101\\s+campaign "res"`));
+    assert.match((await run(args, { env, fetch })).text, /0 sent, 0 failed, 0 skipped, 1 need checking/);
+    assert.equal(posts, 1);
+    assert.equal((await run(["resolve", key, "--data-dir", dir])).code, 2);
+    const done = await run(["resolve", key, "--failed", "--data-dir", dir]);
+    assert.match(done.text, /Marked \+254700000101 as failed. The next run sends it/);
+    assert.equal((await run(["resolve", key, "--sent", "--data-dir", dir])).code, 1);
+    assert.match((await run(args, { env, fetch })).text, /1 sent, 0 failed/);
+    assert.equal(posts, 2);
+    assert.match((await run(["pending", "--data-dir", dir])).text, /Nothing pending/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

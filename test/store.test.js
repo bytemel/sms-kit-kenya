@@ -55,3 +55,52 @@ test("two JSON file stores on one file see each other's writes", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("separate processes sharing one JSON ledger: only one claims a key", async () => {
+  const { spawn } = await import("node:child_process");
+  const dir = await mkdtemp(join(tmpdir(), "sms-kit-procs-"));
+  const file = join(dir, "ledger.json");
+  const lib = new URL("../lib/", import.meta.url).href;
+  const script = `
+    import { createJsonFileStore } from "${lib}store.js";
+    import { createLedger } from "${lib}client.js";
+    const start = Number(process.argv[1]); while (Date.now() < start) {}
+    const ledger = createLedger(createJsonFileStore(${JSON.stringify(file)}));
+    const results = [];
+    for (const k of ["a", "b", "c"]) results.push((await ledger.claim(k, {})).claimed ? 1 : 0);
+    console.log(results.join(""));`;
+  try {
+    const start = Date.now() + 400;
+    const outs = await Promise.all([1, 2, 3, 4].map(() => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script, String(start)]);
+      let out = "";
+      child.stdout.on("data", (c) => { out += c; });
+      child.stderr.on("data", (c) => { out += c; });
+      child.on("error", reject);
+      child.on("close", () => resolve(out.trim()));
+    })));
+    for (let i = 0; i < 3; i++) assert.equal(outs.reduce((n, o) => n + Number(o[i]), 0), 1, `key ${i}: ${outs.join(" ")}`);
+    assert.deepEqual(await readdir(dir), ["ledger.json"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a stale lock is cleared, and a live one makes a write wait then give up", async () => {
+  const { writeFile, utimes } = await import("node:fs/promises");
+  const dir = await mkdtemp(join(tmpdir(), "sms-kit-lock-"));
+  const file = join(dir, "s.json");
+  try {
+    await writeFile(`${file}.lock`, "12345\n");
+    const old = new Date(Date.now() - 60000);
+    await utimes(`${file}.lock`, old, old);
+    await createJsonFileStore(file).set("k", 1);
+    assert.equal(await createJsonFileStore(file).get("k"), 1);
+
+    await writeFile(`${file}.lock`, "12345\n");
+    await assert.rejects(createJsonFileStore(file, { lockTimeoutMs: 50 }).set("k", 2), /Could not lock .* delete .*s\.json\.lock/);
+    assert.equal(await createJsonFileStore(file).get("k"), 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
