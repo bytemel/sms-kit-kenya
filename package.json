@@ -1,0 +1,19 @@
+{
+  "name": "sms-kit-kenya",
+  "version": "1.0.0",
+  "description": "Bulk SMS for Kenya through Africa's Talking without the surprises: GSM-7 checks, number cleanup, opt-outs, no double sends, delivery reports. Zero dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Timothy Mwangi",
+  "bin": {
+    "sms-kit": "bin/sms.js"
+  },
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "test": "node --test",
+    "check": "node bin/sms.js check"
+  },
+  "engines": {
+    "node": ">=20.6"
+  }
+}
