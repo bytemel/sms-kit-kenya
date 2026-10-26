@@ -2,6 +2,8 @@
 
 Bulk SMS in Kenya through Africa's Talking without the surprises: plain Node, zero dependencies, with the checks that keep a send cheap, single and traceable.
 
+**Try it in the browser: [bytemel.github.io/sms-kit-kenya](https://bytemel.github.io/sms-kit-kenya/)** (paste a message and a phone list; see parts, Unicode traps, duplicates and per-person merge results, using the kit's own code)
+
 ## Why I built this
 
 I wire SMS into the apps I build for programmes and communities in Kenya: event reminders, alumni outreach, payment receipts. Sending an SMS looks like one API call. Then it bites you.
