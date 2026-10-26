@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMS Kit Kenya: see what a bulk SMS will really cost</title>
+  <meta name="description" content="Paste a message and see how many SMS parts it costs, which characters switch it to Unicode, and how many of your Kenyan phone numbers are duplicates or wrong. Runs in your browser with the code from sms-kit-kenya.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a4fa8'/%3E%3Cpath d='M8 9h16v11h-9l-5 4v-4H8z' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="playground/style.css">
+  <link rel="stylesheet" href="playground/app.css">
+  <script type="module" src="playground/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <div class="wrap">
+      <p class="crumb"><a href="https://github.com/bytemel/sms-kit-kenya">sms-kit-kenya</a></p>
+      <h1>See what a bulk SMS will really cost</h1>
+      <p class="lead">One curly apostrophe turns a 1-part SMS into 3. One name with an accent does it for that person only. And a list of 500 numbers is often 460 people. Check before you press Send.</p>
+      <p class="privacy">Runs in your browser with the kit's own code. Nothing is uploaded or sent.</p>
+    </div>
+  </header>
+
+  <main id="main" class="wrap">
+    <section class="card" aria-labelledby="msg-h">
+      <div class="head-row"><h2 id="msg-h">1. The message</h2><button class="btn btn-link" type="button" id="msg-sample">Load a message with traps</button></div>
+      <div class="pair">
+        <div class="field">
+          <label for="msg">Message</label>
+          <textarea id="msg" rows="6" spellcheck="true">Hi! Reminder: Demo Day is on Thursday at 9am. Bring your laptop and pitch deck. Reply STOP to opt out.</textarea>
+          <div class="actions"><button class="btn" type="button" id="safe">Make it GSM-safe</button></div>
+        </div>
+        <div class="settings">
+          <div class="tiles">
+            <div class="tile"><span class="tile-label">SMS parts</span><span class="tile-value" id="m-parts">1</span><span class="tile-sub" id="m-parts-sub"></span></div>
+            <div class="tile"><span class="tile-label">Encoding</span><span class="tile-value tile-text" id="m-enc">GSM-7</span><span class="tile-sub" id="m-enc-sub"></span></div>
+          </div>
+          <div class="grid-2">
+            <div class="field"><label for="recipients">Recipients</label><input id="recipients" type="number" min="1" max="1000000" value="500" inputmode="numeric"></div>
+            <div class="field"><label for="rate">Your price per SMS (KES)</label><input id="rate" type="number" min="0" step="0.01" placeholder="from your invoice" inputmode="decimal"></div>
+          </div>
+          <p class="summary" id="m-cost" aria-live="polite"></p>
+        </div>
+      </div>
+      <div id="m-issues"></div>
+    </section>
+
+    <section class="card" aria-labelledby="ph-h">
+      <div class="head-row"><h2 id="ph-h">2. The phone list</h2><button class="btn btn-link" type="button" id="ph-sample">Load a messy list</button></div>
+      <div class="pair">
+        <div class="field">
+          <label for="phones">One number per line, any format</label>
+          <textarea id="phones" rows="8" wrap="off" spellcheck="false"></textarea>
+        </div>
+        <div class="settings">
+          <div class="tiles">
+            <div class="tile"><span class="tile-label">People to send to</span><span class="tile-value" id="p-ok">0</span><span class="tile-sub">unique, valid</span></div>
+            <div class="tile"><span class="tile-label">Taken out</span><span class="tile-value" id="p-out">0</span><span class="tile-sub" id="p-out-sub"></span></div>
+          </div>
+          <div class="field"><label for="cleaned">Clean list (+254)</label><textarea id="cleaned" rows="4" readonly wrap="off"></textarea></div>
+        </div>
+      </div>
+      <div class="table-scroll"><table id="p-bad" hidden><thead><tr><th scope="col">Line</th><th scope="col">What you pasted</th><th scope="col">Why it was taken out</th></tr></thead><tbody></tbody></table></div>
+    </section>
+
+    <section class="card" aria-labelledby="mg-h">
+      <div class="head-row"><h2 id="mg-h">3. The personal touch</h2><button class="btn btn-link" type="button" id="mg-sample">Load the sample</button></div>
+      <p class="hint">Fields like <code>{{first_name}}</code> are filled per person. A long or accented name can change one person's message to Unicode or push it into another part.</p>
+      <div class="pair">
+        <div class="field"><label for="tpl">Template</label><textarea id="tpl" rows="4"></textarea></div>
+        <div class="field"><label for="people">People (CSV with a header row)</label><textarea id="people" rows="6" wrap="off" spellcheck="false"></textarea></div>
+      </div>
+      <p class="summary" id="mg-sum" aria-live="polite"></p>
+      <div class="table-scroll"><table id="mg-table" hidden><thead><tr><th scope="col">Person</th><th scope="col">Message</th><th scope="col" class="num">Parts</th><th scope="col">Note</th></tr></thead><tbody></tbody></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Then send it properly</h2>
+      <p>The kit does the sending too: Africa's Talking client, STOP and SIMAMA opt-outs, a ledger that never sends the same message twice after a timeout, and delivery reports. See the <a href="https://github.com/bytemel/sms-kit-kenya#readme">README</a>.</p>
+    </section>
+  </main>
+  <footer class="wrap foot">
+    <p>Open source: <a href="https://github.com/bytemel/sms-kit-kenya">github.com/bytemel/sms-kit-kenya</a>. Built by <a href="https://timmwangi.com">Timothy Mwangi</a>.</p>
+  </footer>
+</body>
+</html>

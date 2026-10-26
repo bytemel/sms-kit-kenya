@@ -1,0 +1,23 @@
+.crumb { margin: 0 0 0.5rem; font-weight: 600; }
+.crumb a { text-decoration: none; }
+.tiles { display: grid; gap: 0.75rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.tile { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.75rem 0.9rem; display: grid; gap: 0.1rem; min-width: 0; }
+.tile-label { color: var(--muted); font-size: 0.85rem; font-weight: 600; }
+.tile-value { font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.tile-text { font-size: 1.3rem; }
+.tile-sub { color: var(--muted); font-size: 0.82rem; }
+.grid-2 { display: grid; gap: 0.75rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.chars { list-style: none; padding: 0; margin: 0.5rem 0 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.chars li { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0.3rem 0.55rem; font-size: 0.9rem; background: var(--surface); }
+.chars b { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 1.05rem; margin-right: 0.3rem; }
+.ok-row td:first-child { color: var(--muted); }
+td.msg { max-width: 28rem; }
+@media (max-width: 599px) {
+  #mg-table thead, #p-bad thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  #mg-table, #mg-table tbody, #mg-table tr, #p-bad, #p-bad tbody, #p-bad tr { display: block; }
+  #mg-table tr, #p-bad tr { border-bottom: 1px solid var(--line); padding: 0.6rem 0; }
+  #mg-table td, #p-bad td { display: block; border: 0; padding: 0.1rem 0; text-align: left; }
+  #mg-table td.num::before { content: "Parts: "; color: var(--muted); }
+  #p-bad td.num::before { content: "Line "; color: var(--muted); }
+  td.msg { max-width: none; }
+}
